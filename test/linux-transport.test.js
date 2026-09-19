@@ -7,34 +7,34 @@ test('LinuxTransport speaks the documented NDJSON protocol', async () => {
   const originalArgs = process.env.LINUX_IMESSAGE_ARGS;
 
   const backendCode = [
-    "const readline=require('readline');",
-    "setTimeout(()=>console.log(JSON.stringify({event:'message',message:{id:1,chatId:'chat-1',sender:'+61400000000',text:'hello',isGroup:false}})),50);",
-    "const rl=readline.createInterface({input:process.stdin});",
-    "rl.on('line',line=>{try{const r=JSON.parse(line);if(r.action==='send')process.stderr.write('received:'+r.chatId+'\\n')}catch{}});"
+    "console.log(JSON.stringify({event:'ready'}));",
+    "setTimeout(() => console.log(JSON.stringify({event:'message',message:{id:1,chatId:'chat-1',sender:'+61400000000',text:'hello',isGroup:false}})), 25);",
+    "require('readline').createInterface({input:process.stdin}).on('line', line => {",
+    "  try {",
+    "    const request = JSON.parse(line);",
+    "    if (request.action === 'send') process.stderr.write('send:' + request.chatId + '\\n');",
+    "  } catch {}",
+    "});",
   ].join('');
 
   process.env.LINUX_IMESSAGE_COMMAND = process.execPath;
   process.env.LINUX_IMESSAGE_ARGS = JSON.stringify(['-e', backendCode]);
 
-  try {
+  const received = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('message event timeout')), 3000);
+
     const transport = new LinuxTransport();
-    let gotMessage;
-    const messagePromise = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('message event timeout')), 2000);
-      transport._testResolve = message => {
-        clearTimeout(timeout);
-        resolve(message);
-      };
-    });
 
-    await transport.start(message => {
-      gotMessage = message;
-      transport._testResolve?.(message);
-    });
+    transport.start(message => {
+      clearTimeout(timeout);
+      resolve({ transport, message });
+    }).catch(reject);
+  });
 
-    await messagePromise;
+  try {
+    const { transport, message } = await received;
 
-    assert.deepEqual(gotMessage, {
+    assert.deepEqual(message, {
       id: '1',
       chatId: 'chat-1',
       sender: '+61400000000',
@@ -44,7 +44,9 @@ test('LinuxTransport speaks the documented NDJSON protocol', async () => {
       attachments: [],
     });
 
-    await assert.doesNotReject(() => transport.sendText('chat-1', 'reply'));
+    await transport.sendText('chat-1', 'reply');
+    assert.equal(transport.status().connected, true);
+
     await transport.close();
   } finally {
     if (originalCommand === undefined) delete process.env.LINUX_IMESSAGE_COMMAND;
